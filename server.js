@@ -38,7 +38,7 @@ app.get('/', (req, res) => res.send('API is running'));
 
 
 // 7️⃣ Start server
-const PORT = process.env.PORT || https://quiz-gen-e0ql.onrender.com;
+const PORT = process.env.PORT || 7653;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
