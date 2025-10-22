@@ -1,152 +1,63 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const CoinFlip = require('../model/inventory');
-const authenticateJWT = require('../middleware/auth');
-const QuantumCoinFlipAgent = require('../services/quantumCoinFlip');
+const Quiz = require("../models/Quiz");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+require("dotenv").config();
 
-const quantumAgent = new QuantumCoinFlipAgent();
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// 🔓 Public GET endpoint – simple coin flip (no database)
-router.get('/flip', (req, res) => {
-  const result = Math.random() < 0.5 ? "Heads" : "Tails";
-  res.status(200).json({ result });
-});
-
-// 🔐 Classical flip with database storage
-router.post('/flip', authenticateJWT, async (req, res) => {
+router.post("/generateQuiz", async (req, res) => {
   try {
-    const { result } = req.body;
-    const userId = req.user.id;
+    const { Topic, countof } = req.body;
 
-    console.log(`💾 Saving classical flip for user: ${userId}, result: ${result}`);
-
-    const newFlip = new CoinFlip({ 
-      result, 
-      userId: userId,
-      timestamp: new Date(),
-      quantum: false
-    });
-    
-    const saved = await newFlip.save();
-    console.log(`✅ Saved classical flip with ID: ${saved._id}`);
-    
-    res.status(201).json({ success: true, data: saved });
-  } catch (error) {
-    console.error("Error saving classical flip:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
-});
-
-// 🔐 NEW: Quantum coin flip with database storage
-router.post('/quantum-flip', authenticateJWT, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { trials = 1, privacyMode = true } = req.body;
-    
-    console.log(`⚛️ Quantum flip request: ${trials} trials for user ${userId}`);
-    
-    if (trials > 100) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Maximum 100 trials per request" 
-      });
+    if (!Topic || !countof) {
+      return res.status(400).json({ error: "Topic and number of questions are required" });
     }
 
-    // Run quantum trials via Python service
-    const results = await quantumAgent.runAutonomousTrials(trials, userId);
-    
-    console.log(`🔬 Received ${results.length} quantum results, saving to database...`);
-    
-    // Store quantum results in database
-    const savedResults = [];
-    for (const result of results) {
-      const newFlip = new CoinFlip({
-        result: result.outcome,
-        userId: userId, // Use actual userId for database queries (not pseudonymized)
-        batchId: result.batch_id || result.batchId,
-        quantum: true, // Mark as quantum
-        timestamp: new Date(result.timestamp),
-        sessionId: result.session_id || result.sessionId,
-        privacyPreserved: privacyMode,
-        circuitDepth: result.circuit_depth || result.circuitDepth,
-        gateCount: result.gate_count || result.gateCount
-      });
-      
-      const saved = await newFlip.save();
-      savedResults.push(saved);
-      console.log(`✅ Saved quantum flip ${saved._id}: ${saved.result}`);
-    }
-
-    // Generate aggregated statistics
-    const headsCount = results.filter(r => r.outcome === 'Heads').length;
-    const tailsCount = results.filter(r => r.outcome === 'Tails').length;
-    
-    const privacyPreservedStats = privacyMode ? {
-      headsCount: quantumAgent.addDifferentialPrivacyNoise(headsCount),
-      tailsCount: quantumAgent.addDifferentialPrivacyNoise(tailsCount),
-      totalTrials: trials,
-      privacyBudgetUsed: 0.1,
-      quantum: true
-    } : { 
-      headsCount, 
-      tailsCount, 
-      totalTrials: trials,
-      quantum: true 
-    };
-
-    console.log(`📊 Quantum flip completed: ${headsCount} heads, ${tailsCount} tails`);
-
-    res.status(201).json({
-      success: true,
-      data: {
-        batchId: results[0]?.batch_id || results[0]?.batchId,
-        trials: trials,
-        quantum: true,
-        backend: results[0]?.backend || 'qiskit_simulator',
-        statistics: privacyPreservedStats,
-        lastResult: results[results.length - 1]?.outcome,
-        savedCount: savedResults.length
+    const prompt = `
+    Generate ${countof} multiple-choice questions about "${Topic}".
+    Format strictly as JSON like this:
+    [
+      {
+        "question": "Question text",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correctAnswer": "Option A"
       }
+    ]
+    `;
+
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const result = await model.generateContent(prompt);
+
+    let text = result.response.text();
+    text = text.replace(/```json|```/g, "");
+
+    let aiQuestions = JSON.parse(text);
+
+    // Map AI output to Mongoose schema
+    const formattedQuestions = aiQuestions.map(q => {
+      const correctIndex = q.options.findIndex(opt => opt === q.correctAnswer);
+      return {
+        questiontext: q.question,
+        options: q.options,
+        correctOptionIndex: correctIndex
+      };
     });
 
-  } catch (error) {
-    console.error("Error in quantum flip:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Quantum agent error",
-      error: error.message 
+    const quiz = new Quiz({
+      Topic,
+      countof: formattedQuestions.length,
+      question: formattedQuestions,
+      source: "Ai"
     });
-  }
-});
 
-// 🔐 Get user flip history
-router.get('/history', authenticateJWT, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    
-    console.log(`📊 Fetching history for user: ${userId}`);
-    
-    const history = await CoinFlip.find({ 
-      userId: userId 
-    })
-    .sort({ timestamp: -1 })
-    .limit(100);
-    
-    console.log(`✅ Found ${history.length} flips for user ${userId}`);
-    
-    res.status(200).json({ 
-      success: true, 
-      data: history,
-      userId: userId,
-      count: history.length
-    });
+    await quiz.save();
+
+    res.status(200).json({ message: "Quiz generated successfully", quiz });
+    console.log("Generated Quiz:", JSON.stringify(quiz, null, 2));
   } catch (error) {
-    console.error("Error fetching history:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: "Server error",
-      error: error.message 
-    });
+    console.error("Error generating quiz:", error);
+    res.status(500).json({ error: "Failed to generate quiz", details: error.message });
   }
 });
 
