@@ -20,7 +20,7 @@ app.use(morgan('dev'));
 
 // 3️⃣ CORS setup
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: process.env.FRONTEND_URL || 'https://quiz-gen-e0ql.onrender.com',
   credentials: true,
   methods: ['GET','POST','PUT','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization']
@@ -38,7 +38,7 @@ app.get('/', (req, res) => res.send('API is running'));
 
 
 // 7️⃣ Start server
-const PORT = process.env.PORT || 7653;
+const PORT = process.env.PORT || https://quiz-gen-e0ql.onrender.com;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
